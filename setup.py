@@ -47,6 +47,7 @@ setuptools.setup(
     packages=setuptools.find_packages(
         include=[
             'twinotter',
+            'twinotter.analysis',
             'twinotter.plots',
             'twinotter.data',
             'twinotter.util',

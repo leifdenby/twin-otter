@@ -2,12 +2,17 @@
 For finding and analysing boundary layer legs
 """
 import datetime
+from pathlib import Path
 
 import matplotlib.pyplot as plt
 import seaborn as sns
 import numpy as np
 import xarray as xr
 import scipy.ndimage
+from scipy import stats
+from tqdm import tqdm
+
+from .. import load_flight
 
 
 def make_timeseries_plot(ds, variables, include_velocity_arrows=True):
@@ -77,3 +82,66 @@ def find_bl_legs(
         for ds_leg in legs:
             leg_times.append((ds_leg.time.min(), ds_leg.time.max()))
         return leg_times
+
+
+def main():
+    import argparse
+
+    argparser = argparse.ArgumentParser()
+    argparser.add_argument("flight_data_path")
+    args = argparser.parse_args()
+
+    generate_flight_plots(args.flight_data_path)
+
+
+def _rename_time(ds_):
+    if "Time" in ds_.coords:
+        da_time = ds_.Time
+        da_time.name = "time"
+        ds_["time"] = da_time
+        ds_ = ds_.swap_dims(dict(Time="time"))
+        ds_ = ds_.drop("Time")
+    return ds_
+
+
+def generate_flight_plots(flight_data_path):
+    ds = load_flight(flight_data_path, debug=True)
+    ds = _rename_time(ds)
+
+    ds_bl_legs = find_bl_legs(ds.ALT_OXTS, return_labels=True)
+    ds_merged = xr.merge([ds, ds_bl_legs])
+
+    import seaborn as sns
+
+    def r2(x, y):
+        return stats.pearsonr(x, y)[0] ** 2
+
+    x = "TDEW_BUCK"
+    y = "H2O_LICOR"
+
+    for v in [x, y]:
+        if v not in ds:
+            raise Exception(f"No `{v}` data")
+
+    p_figures = Path(flight_data_path) / "figures" / "boundary_layer"
+    p_figures.mkdir(exist_ok=True)
+
+    bl_legs = find_bl_legs(da_z=ds.ALT_OXTS)
+    for n, (t_min, t_max) in enumerate(tqdm(bl_legs)):
+        ds_leg = ds_merged.sel(time=slice(t_min, t_max))
+        plt.figure()
+        sns.jointplot(x, y, data=ds_leg, kind="reg", stat_func=r2)
+        plt.gcf().suptitle(f"flight {ds.flight_number}, boundary layer leg {n}\n"
+                           f"{t_min.values} to {t_max.values}")
+        plt.savefig(str(p_figures/f"joint_dist_{n}.png"), bbox_inches="tight")
+
+        plt.figure()
+        variables = ["ALT_OXTS", ("TDEW_BUCK", "H2O_LICOR"), "HUM_ROSE", "W_OXTS"]
+        make_timeseries_plot(ds_leg, variables)
+        st = plt.suptitle(f"Flight {ds.flight_number} boundary layer leg {n}")
+        plt.savefig(str(p_figures/f"timeseries_{n}.png"), bbox_inches="tight",
+                     bbox_extra_artists=[st],)
+
+
+if __name__ == "__main__":
+    main()
